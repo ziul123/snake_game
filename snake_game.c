@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "pico/stdlib.h"
+#include "pico/rand.h"
 #include "hardware/pio.h"
 #include "hardware/clocks.h"
 #include "hardware/adc.h"
@@ -113,6 +114,8 @@ segment_t *free_list;
 uint8_t snake_size;
 board_dir_t head_dir;
 
+void spawn_fruit();
+
 void game_init() {
   game_board[0][0] = SNK;
   snake[0] = (segment_t) {0, 0, NULL, NULL};
@@ -125,10 +128,17 @@ void game_init() {
 	}
 	snake[snake_size - 1].next = NULL;
 	free_list = &snake[1];
-	game_board[0][1] = FRT;
-	game_board[3][3] = FRT;
-	game_board[3][4] = FRT;
-	game_board[3][2] = FRT;
+  spawn_fruit();
+}
+
+void spawn_fruit() {
+  uint8_t next_fruit;
+  game_obj_t *b = &game_board[0][0];
+  while (true) {
+    next_fruit = get_rand_32() % 25;
+    if (*(b + next_fruit) == EPT) break;
+  }
+  *(b + next_fruit) = FRT;
 }
 
 /* returns NULL if out of bounds */
@@ -166,6 +176,7 @@ bool move_snake() {
 	
 	if (grow) {
 		snake_size++;
+    spawn_fruit();
 	} else {
 		game_board[snake_last->row][snake_last->col] = EPT;
 		segment_t *second_last = snake_last->prev;

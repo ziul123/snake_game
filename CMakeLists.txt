@@ -61,6 +61,7 @@ target_link_libraries(snake_game
         hardware_pio
         hardware_clocks
         hardware_adc
+        pico_rand
         )
 
 pico_add_extra_outputs(snake_game)
