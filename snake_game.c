@@ -226,12 +226,34 @@ void joystick_init() {
 
 #pragma region BUTTONS
 
-#define BUTTON_A 5
+#define BUTTON_B 6
+#define DEBOUNCE_DELAY_MS 120
+
+volatile bool paused = false;
+volatile absolute_time_t last_interrupt_time;
+
+void gpio_irq_callback(uint gpio, uint32_t events) {
+  absolute_time_t now = get_absolute_time();
+  int64_t time_since_last = absolute_time_diff_us(last_interrupt_time, now);
+
+  if (gpio == BUTTON_B && time_since_last < DEBOUNCE_DELAY_MS * 1000)
+    return;
+
+  last_interrupt_time = now;
+
+  if (gpio == BUTTON_B && events & GPIO_IRQ_EDGE_FALL) {
+    paused = !paused;
+    return;
+  }
+}
 
 void button_init() {
-  gpio_init(BUTTON_A);
-  gpio_set_dir(BUTTON_A, GPIO_IN);
-  gpio_pull_up(BUTTON_A);
+  gpio_init(BUTTON_B);
+  gpio_set_dir(BUTTON_B, GPIO_IN);
+  gpio_pull_up(BUTTON_B);
+  gpio_set_irq_enabled_with_callback(BUTTON_B, GPIO_IRQ_EDGE_FALL, 
+                                    true, gpio_irq_callback);
+  last_interrupt_time = nil_time;
 }
 
 #pragma endregion
@@ -275,10 +297,14 @@ int main() {
   button_init();
 
   while (true) {
-    set_leds();
-    npWrite();
-    head_dir = last_dir;
-    if (!move_snake()) sleep_ms(UINT32_MAX);
-    sleep_ms(500);
+    if (paused) {
+      tight_loop_contents();
+    } else {
+      set_leds();
+      npWrite();
+      head_dir = last_dir;
+      if (!move_snake()) sleep_ms(UINT32_MAX);
+      sleep_ms(500);
+    }
   }
 }
