@@ -5,84 +5,66 @@
 #include "hardware/pio.h"
 #include "hardware/clocks.h"
 #include "hardware/adc.h"
+#include "hardware/pwm.h"
 
 // Biblioteca gerada pelo arquivo .pio durante compilação.
 #include "ws2818b.pio.h"
 
-#pragma region LEDS
-// Definição do número de LEDs e pino.
-#define LED_COUNT 25
-#define LED_PIN 7
+// Biblioteca do SSD1306
+#include "ssd1306.h"
 
-// Definição de pixel GRB
-struct pixel_t {
-  uint8_t G, R, B; // Três valores de 8-bits compõem um pixel.
-};
-typedef struct pixel_t pixel_t;
-typedef pixel_t npLED_t; // Mudança de nome de "struct pixel_t" para "npLED_t" por clareza.
 
-// Declaração do buffer de pixels que formam a matriz.
-npLED_t leds[LED_COUNT];
+#pragma region BUZZER
 
-// Variáveis para uso da máquina PIO.
-PIO np_pio;
-uint sm;
+#define BUZZER_A 21
 
-/**
- * Inicializa a máquina PIO para controle da matriz de LEDs.
- */
-void npInit(uint pin) {
+const float DIVISOR_CLK_PWM = 16.0;
 
-  // Cria programa PIO.
-  uint offset = pio_add_program(pio0, &ws2818b_program);
-  np_pio = pio0;
+uint16_t next_sfx;
 
-  // Toma posse de uma máquina PIO.
-  sm = pio_claim_unused_sm(np_pio, false);
-  if (sm < 0) {
-    np_pio = pio1;
-    sm = pio_claim_unused_sm(np_pio, true); // Se nenhuma máquina estiver livre, panic!
-  }
+typedef struct note {
+  uint16_t value;
+  uint32_t duration_ms;
+} note;
 
-  // Inicia programa na máquina PIO obtida.
-  ws2818b_program_init(np_pio, sm, offset, pin, 800000.f);
+#define SONG_SIZE 10
 
-  // Limpa buffer de pixels.
-  for (uint i = 0; i < LED_COUNT; ++i) {
-    leds[i].R = 0;
-    leds[i].G = 0;
-    leds[i].B = 0;
-  }
+note song[SONG_SIZE] = {{7910, 150}, {8385, 150}, {8881, 150}, {9406, 150},
+                        {9962, 150}, {10556, 150}, {11183, 150}, {11846, 150},
+                        {12555, 150}, {13301, 300}};
+
+void buzzer_init() {
+  uint slice;
+  gpio_set_function(BUZZER_A, GPIO_FUNC_PWM);
+  slice = pwm_gpio_to_slice_num(BUZZER_A);
+  pwm_set_clkdiv(slice, DIVISOR_CLK_PWM);
 }
 
-/**
- * Atribui uma cor RGB a um LED.
- */
-void npSetLED(const uint index, const uint8_t r, const uint8_t g, const uint8_t b) {
-  leds[index].R = r;
-  leds[index].G = g;
-  leds[index].B = b;
+void play_note(uint pin, uint16_t wrap) {
+  int slice = pwm_gpio_to_slice_num(pin);
+  pwm_set_wrap(slice, wrap);
+  pwm_set_gpio_level(pin, wrap / 8);
+  pwm_set_enabled(slice, true);
 }
 
-/**
- * Limpa o buffer de pixels.
- */
-void npClear() {
-  for (uint i = 0; i < LED_COUNT; ++i)
-    npSetLED(i, 0, 0, 0);
+void stop_note(uint pin) {
+  int slice = pwm_gpio_to_slice_num(pin);
+  pwm_set_enabled(slice, false);
 }
 
-/**
- * Escreve os dados do buffer nos LEDs.
- */
-void npWrite() {
-  // Escreve cada dado de 8-bits dos pixels em sequência no buffer da máquina PIO.
-  for (uint i = 0; i < LED_COUNT; ++i) {
-    pio_sm_put_blocking(np_pio, sm, leds[i].G);
-    pio_sm_put_blocking(np_pio, sm, leds[i].R);
-    pio_sm_put_blocking(np_pio, sm, leds[i].B);
+int64_t song_callback(__unused alarm_id_t, __unused void*) {
+  static uint8_t curr_note = 0;
+  note n = song[curr_note++];
+  if (curr_note == SONG_SIZE) {
+    stop_note(BUZZER_A);
+    return 0;
   }
-  sleep_us(100); // Espera 100us, sinal de RESET do datasheet.
+  play_note(BUZZER_A, n.value);
+  return n.duration_ms * 1000;
+}
+
+void death_sound() {
+  add_alarm_in_ms(1, song_callback, NULL, false);
 }
 
 #pragma endregion
@@ -99,6 +81,8 @@ typedef enum BOARD_DIRS {UP, DOWN, LEFT, RIGHT} board_dir_t;
 game_obj_t game_board[NUM_ROWS][NUM_COLS] = {0};
 
 typedef struct segment segment_t;
+
+
 
 struct segment {
 	uint8_t row; 
@@ -177,14 +161,132 @@ bool move_snake() {
 	if (grow) {
 		snake_size++;
     spawn_fruit();
+    next_sfx = 8380;
 	} else {
 		game_board[snake_last->row][snake_last->col] = EPT;
 		segment_t *second_last = snake_last->prev;
 		snake_last->next = free_list;
 		free_list = snake_last;
 		snake_last = second_last;
+    next_sfx = 29886;
 	}
 	return true;
+}
+
+#pragma endregion
+
+#pragma region LEDS
+// Definição do número de LEDs e pino.
+#define LED_COUNT 25
+#define LED_PIN 7
+
+// Definição de pixel GRB
+struct pixel_t {
+  uint8_t G, R, B; // Três valores de 8-bits compõem um pixel.
+};
+typedef struct pixel_t pixel_t;
+typedef pixel_t npLED_t; // Mudança de nome de "struct pixel_t" para "npLED_t" por clareza.
+
+// Declaração do buffer de pixels que formam a matriz.
+npLED_t leds[LED_COUNT];
+
+// Variáveis para uso da máquina PIO.
+PIO np_pio;
+uint sm;
+
+/**
+ * Inicializa a máquina PIO para controle da matriz de LEDs.
+ */
+void npInit(uint pin) {
+
+  // Cria programa PIO.
+  uint offset = pio_add_program(pio0, &ws2818b_program);
+  np_pio = pio0;
+
+  // Toma posse de uma máquina PIO.
+  sm = pio_claim_unused_sm(np_pio, false);
+  if (sm < 0) {
+    np_pio = pio1;
+    sm = pio_claim_unused_sm(np_pio, true); // Se nenhuma máquina estiver livre, panic!
+  }
+
+  // Inicia programa na máquina PIO obtida.
+  ws2818b_program_init(np_pio, sm, offset, pin, 800000.f);
+
+  // Limpa buffer de pixels.
+  for (uint i = 0; i < LED_COUNT; ++i) {
+    leds[i].R = 0;
+    leds[i].G = 0;
+    leds[i].B = 0;
+  }
+}
+
+/**
+ * Atribui uma cor RGB a um LED.
+ */
+void npSetLED(const uint index, const uint8_t r, const uint8_t g, const uint8_t b) {
+  leds[index].R = r;
+  leds[index].G = g;
+  leds[index].B = b;
+}
+
+/**
+ * Limpa o buffer de pixels.
+ */
+void npClear() {
+  for (uint i = 0; i < LED_COUNT; ++i)
+    npSetLED(i, 0, 0, 0);
+}
+
+/**
+ * Escreve os dados do buffer nos LEDs.
+ */
+void npWrite() {
+  // Escreve cada dado de 8-bits dos pixels em sequência no buffer da máquina PIO.
+  for (uint i = 0; i < LED_COUNT; ++i) {
+    pio_sm_put_blocking(np_pio, sm, leds[i].G);
+    pio_sm_put_blocking(np_pio, sm, leds[i].R);
+    pio_sm_put_blocking(np_pio, sm, leds[i].B);
+  }
+  sleep_us(100); // Espera 100us, sinal de RESET do datasheet.
+}
+
+void set_leds() {
+  npClear();
+  for (uint8_t row = 0; row < NUM_ROWS; row++) {
+    bool invert = row % 2 == 0;
+    for (uint8_t col = 0; col < NUM_COLS; col++) {
+      uint8_t led_i;
+      if (!invert) {
+        led_i = row * 5 + col;
+      } else {
+        led_i = row * 5 + (NUM_COLS - 1 - col);
+      }
+      switch (game_board[row][col]) {
+      case SNK:
+        leds[led_i].G = 100;
+        break;
+      case FRT:
+        leds[led_i].R = 100;
+        break;
+      default:
+        break;
+      }
+    }
+  }
+}
+
+void flash_leds() {
+  npLED_t leds_aux[LED_COUNT] = {0};
+  memcpy(leds_aux, leds, sizeof(leds_aux));
+  for (int i = 0; i < 5; i++) {
+    memset(leds, 0, sizeof(npLED_t) * LED_COUNT);
+    npWrite();
+    sleep_ms(100);
+    memcpy(leds, leds_aux, sizeof(npLED_t) * LED_COUNT);
+    npWrite();
+    sleep_ms(100);
+  }
 }
 
 #pragma endregion
@@ -258,30 +360,26 @@ void button_init() {
 
 #pragma endregion
 
-void set_leds() {
-  npClear();
-  for (uint8_t row = 0; row < NUM_ROWS; row++) {
-    bool invert = row % 2 == 0;
-    for (uint8_t col = 0; col < NUM_COLS; col++) {
-      uint8_t led_i;
-      if (!invert) {
-        led_i = row * 5 + col;
-      } else {
-        led_i = row * 5 + (NUM_COLS - 1 - col);
-      }
-      switch (game_board[row][col]) {
-      case SNK:
-        leds[led_i].G = 100;
-        break;
-      case FRT:
-        leds[led_i].R = 100;
-        break;
-      default:
-        break;
-      }
-    }
-  }
+#pragma region OLED
+
+const uint I2C_SDA_PIN = 14;
+const uint I2C_SCL_PIN = 15;
+
+ssd1306_t display;
+
+void oled_init() {
+  i2c_init(i2c1, 400000);
+  gpio_set_function(I2C_SDA_PIN, GPIO_FUNC_I2C);
+  gpio_set_function(I2C_SCL_PIN, GPIO_FUNC_I2C);
+  gpio_pull_up(I2C_SDA_PIN);
+  gpio_pull_up(I2C_SCL_PIN);
+  display.external_vcc = false;
+  ssd1306_init(&display, 128, 64, 0x3C, i2c1);
 }
+
+#pragma endregion
+
+
 
 int main() {
 
@@ -295,16 +393,39 @@ int main() {
   joystick_init();
   game_init();
   button_init();
+  buzzer_init();
+  oled_init();
 
   while (true) {
     if (paused) {
-      tight_loop_contents();
+      while (paused) {
+        ssd1306_clear(&display);
+        ssd1306_draw_string(&display, 0, 0, 3, "PAUSED");
+        ssd1306_show(&display);
+        sleep_ms(400);
+        ssd1306_clear(&display);
+        ssd1306_show(&display);
+        sleep_ms(200);
+      }
     } else {
       set_leds();
       npWrite();
+      char score[2] = {0};
+      sprintf(score, "%d", snake_size);
+      ssd1306_clear(&display);
+      ssd1306_draw_string(&display, 0, 0, 3, "SCORE:");
+      ssd1306_draw_string(&display, 0, 32, 3, score);
+      ssd1306_show(&display);
+      play_note(BUZZER_A, next_sfx);
       head_dir = last_dir;
-      if (!move_snake()) sleep_ms(UINT32_MAX);
-      sleep_ms(500);
+      if (!move_snake()) break;
+      sleep_ms(200);
+      stop_note(BUZZER_A);
+      sleep_ms(300);
     }
   }
+  stop_note(BUZZER_A);
+  death_sound();
+  flash_leds();
+  sleep_ms(UINT32_MAX);
 }

@@ -35,7 +35,7 @@ pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(snake_game snake_game.c )
+add_executable(snake_game snake_game.c ssd1306.c)
 
 pico_set_program_name(snake_game "snake_game")
 pico_set_program_version(snake_game "0.1")
@@ -62,6 +62,8 @@ target_link_libraries(snake_game
         hardware_clocks
         hardware_adc
         pico_rand
+        hardware_pwm
+        hardware_i2c
         )
 
 pico_add_extra_outputs(snake_game)
